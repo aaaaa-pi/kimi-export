@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 400px;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      background: #f8f9fa;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #333;
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .header h3 {
+      margin: 0;
+      color: #007bff;
+    }
+    
+    .header .version {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .excel-upload {
+      background: white;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .excel-upload h4 {
+      margin: 0 0 10px 0;
+      color: #333;
+      font-size: 14px;
+    }
+
+    .file-input-container {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+    }
+
+    .file-input {
+      display: none;
+    }
+
+    .file-input-label {
+      display: block;
+      padding: 10px 15px;
+      background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);
+      color: white;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.3s;
+      font-size: 13px;
+    }
+
+    .file-input-label:hover {
+      background: linear-gradient(135deg, #5a32a3 0%, #4e2a8e 100%);
+    }
+
+    .file-info {
+      margin-top: 10px;
+      padding: 8px 12px;
+      background: #e7f3ff;
+      border: 1px solid #bee5eb;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #0c5460;
+      display: none;
+    }
+
+    .file-info.show {
+      display: block;
+    }
+    
+    .button {
+      width: 100%;
+      padding: 15px;
+      margin: 10px 0;
+      background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.3s;
+      box-shadow: 0 2px 4px rgba(0, 123, 255, 0.2);
+    }
+    
+    .button:hover {
+      background: linear-gradient(135deg, #0056b3 0%, #004085 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(0, 123, 255, 0.3);
+    }
+    
+    .button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    
+    .button-stop {
+      background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+      margin-top: 10px;
+    }
+    
+    .button-stop:hover {
+      background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+    }
+    
+    .button-export {
+      background: linear-gradient(135deg, #fd7e14 0%, #e8590c 100%);
+      margin-top: 10px;
+    }
+    
+    .button-export:hover {
+      background: linear-gradient(135deg, #e8590c 0%, #dc530b 100%);
+    }
+    
+    .status {
+      margin: 15px 0;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      text-align: center;
+      animation: fadeIn 0.3s ease;
+      white-space: pre-line;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .status.info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+
+    .status.auto {
+      background: #e7f3ff;
+      color: #004085;
+      border: 1px solid #b3d7ff;
+    }
+    
+    .warning-box {
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffeaa7;
+      border-radius: 6px;
+      padding: 12px;
+      margin: 15px 0;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    
+    .warning-box .icon {
+      font-weight: bold;
+      margin-right: 5px;
+    }
+    
+    .mode-indicator {
+      background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+      color: white;
+      padding: 10px;
+      border-radius: 6px;
+      text-align: center;
+      font-size: 12px;
+      margin-bottom: 15px;
+      font-weight: bold;
+      display: none;
+      animation: pulse 2s infinite;
+    }
+
+    .mode-indicator.show {
+      display: block;
+    }
+    
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.7; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Excel文件上传区域 -->
+  <div id="excelUpload" class="excel-upload">
+    <h4>📁 上传问题列表</h4>
+    <div class="file-input-container">
+      <input type="file" id="excelFile" class="file-input" accept=".xlsx,.xls,.csv">
+      <label for="excelFile" class="file-input-label">
+        📂 选择Excel文件 (支持 .xlsx, .xls, .csv)
+      </label>
+    </div>
+    <div id="fileInfo" class="file-info">
+      <div id="fileName"></div>
+      <div id="questionCount"></div>
+    </div>
+  </div>
+
+  <!-- 模式指示器 -->
+  <div id="modeIndicator" class="mode-indicator">
+    🤖 自动问答模式进行中
+  </div>
+
+  <!-- 开始自动问答按钮 -->
+  <button id="startAutoCollection" class="button">🤖 开始自动问答</button>
+  
+  <!-- 手动导出按钮 -->
+  <button id="finishAndExport" class="button button-export" style="display: none;">📋 手动导出数据</button>
+  
+  <!-- 停止收集按钮 -->
+  <button id="stopCollection" class="button button-stop" style="display: none;">🛑 停止自动问答</button>
+
+   <!-- 🔥 新增：清空数据按钮（可选） -->
+  <button id="clearData" class="button button-clear" style="display: none;">🧹 清空所有数据</button>
+
+  <div id="status" class="status" style="display: none;"></div>
+  
+  <script src="libs/xlsx.full.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

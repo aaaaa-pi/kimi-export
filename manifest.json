@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Kimi自动问答器",
+  "version": "3.0.0",
+  "description": "Kimi AI自动问答器，支持Excel/CSV批量问题自动问答，智能收集问答数据并自动导出CSV",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://www.kimi.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.kimi.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Kimi自动问答器"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js", "libs/xlsx.full.min.js"],
+      "matches": ["https://www.kimi.com/*"]
+    }
+  ]
+}
