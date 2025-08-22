@@ -46,6 +46,49 @@
     }
   };
 
+  // 🔥 将 simulateTyping 函数移到这里，在 AutoQuestionManager 之前定义
+  // 模拟打字输入（备用方案）
+  async function simulateTyping(element, text) {
+    console.log('⌨️ 开始模拟打字输入...');
+    
+    element.focus();
+    
+    // 清空内容
+    element.innerHTML = '<p><br></p>';
+    
+    // 逐字符输入
+    for (let i = 0; i < text.length; i++) {
+      if (GlobalStopManager.checkStopped()) {
+        console.log('🛑 打字过程中检测到停止信号');
+        break;
+      }
+      
+      const char = text[i];
+      
+      // 创建输入事件
+      const inputEvent = new InputEvent('input', {
+        bubbles: true,
+        cancelable: true,
+        data: char,
+        inputType: 'insertText'
+      });
+      
+      // 更新内容
+      const currentText = element.textContent || '';
+      element.innerHTML = `<p>${currentText + char}</p>`;
+      
+      // 触发事件
+      element.dispatchEvent(inputEvent);
+      
+      // 短暂延迟模拟真实打字
+      if (i < text.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+    
+    console.log('✅ 模拟打字完成');
+  }
+
   // 统一的数据收集器 - 适配Kimi
   const UnifiedDataCollector = {
     // 完整收集当前问答数据
@@ -152,7 +195,7 @@
         } else {
           // 没有搜索结果的问答，先等待5秒确保对话标题生成完毕
           await this.delay(5000);
-          console.log('📝 无搜索结果，收集基础问答数据...');
+          console.log('🔍 无搜索结果，收集基础问答数据...');
           const fileName = this.extractFileName();
           
           const result = [{
@@ -296,7 +339,7 @@
           }
         });
         
-        console.log(`🏁 搜索结果提取完成，共 ${results.length} 个结果`);
+        console.log(`🎉 搜索结果提取完成，共 ${results.length} 个结果`);
         
       } catch (error) {
         console.error('💥 提取搜索结果失败:', error);
@@ -330,7 +373,7 @@
     
     extractSearchTime(element) {
       const timeElement = element.querySelector('.date');
-      return timeElement ? timeElement.textContent.trim() : '时间未知';
+      return timeElement ? timeElement.textContent.trim() : '';
     },
 
     // 提取对话标题 - 从侧边栏历史会话获取
@@ -403,7 +446,7 @@
     
     // 延迟重试获取文件名（给侧边栏更多加载时间）
     async extractFileNameWithRetry(maxRetries = 3, delay = 2000) {
-      console.log('🔄 延迟重试获取文件名...');
+      console.log('📄 延迟重试获取文件名...');
       
       for (let i = 0; i < maxRetries; i++) {
         console.log(`📄 重试获取文件名 (${i + 1}/${maxRetries})`);
@@ -688,7 +731,6 @@
     }
   }
 
-
   // 数据收集器 - 支持自动模式和手动导出
   const DataCollectionManager = {
     collectedData: [],
@@ -716,7 +758,7 @@
         return { success: false, error: '没有收集到任何数据' };
       }
       
-      console.log(`🏁 完成收集，共收集 ${this.collectedData.length} 行数据`);
+      console.log(`🎉 完成收集，共收集 ${this.collectedData.length} 行数据`);
       
       const result = {
         success: true,
@@ -775,7 +817,7 @@
         await this.processAllQuestions();
         
         if (!GlobalStopManager.checkStopped()) {
-          console.log('🏁 所有问题处理完成');
+          console.log('🎉 所有问题处理完成');
           return {
             success: true,
             data: this.collectedData,
@@ -928,7 +970,7 @@
           }
           
           // 步骤2: 等待AI回答完成并收集数据
-          console.log(`🔄 步骤2/4: 等待AI回答完成并收集数据`);
+          console.log(`📄 步骤2/4: 等待AI回答完成并收集数据`);
           if (this.statusCallback) {
             this.statusCallback({
               current: i + 1,
@@ -974,7 +1016,7 @@
           
           // 步骤4: 如果不是最后一个问题，开启新对话
           if (i < this.questionQueue.length - 1 && !GlobalStopManager.checkStopped()) {
-            console.log(`🔄 步骤4/4: 为下一个问题开启新对话`);
+            console.log(`📄 步骤4/4: 为下一个问题开启新对话`);
             if (this.statusCallback) {
               this.statusCallback({
                 current: i + 1,
@@ -987,7 +1029,7 @@
             await this.startNewConversation();
             console.log(`✅ 步骤4完成: 新对话已开启，准备处理第 ${i + 2} 个问题`);
           } else if (i === this.questionQueue.length - 1) {
-            console.log(`🎯 这是最后一个问题，不需要开启新对话`);
+            console.log(`🎯 这是最后一个问题，不需开启新对话`);
           }
           
           // 完成状态更新
@@ -1028,7 +1070,7 @@
           // 即使出错，也要为下一个问题开启新对话
           if (i < this.questionQueue.length - 1 && !GlobalStopManager.checkStopped()) {
             try {
-              console.log(`🔄 错误恢复: 为下一个问题开启新对话`);
+              console.log(`📄 错误恢复: 为下一个问题开启新对话`);
               await this.startNewConversation();
               console.log(`✅ 错误恢复: 新对话已开启`);
             } catch (newChatError) {
@@ -1060,13 +1102,13 @@
       if (GlobalStopManager.checkStopped()) {
         console.log(`🛑 自动问答流程被用户停止`);
       } else {
-        console.log(`🏁 自动问答流程正常完成`);
+        console.log(`🎉 自动问答流程正常完成`);
       }
     },
     
     // 等待AI回答完成并收集数据 - Kimi专用
     async waitForAIResponseAndCollect(question) {
-      console.log('🔄 开始等待AI回答并收集数据...');
+      console.log('📄 开始等待AI回答并收集数据...');
       
       return new Promise((resolve, reject) => {
         let collectionCompleted = false;
@@ -1194,7 +1236,7 @@
           attributeFilter: ['class']
         });
         
-        console.log('📡 AI回答等待监听已启动');
+        console.log('📡 AI回答等待监控已启动');
         
         // 设置超时保护（最多等待3分钟）
         setTimeout(() => {
@@ -1235,7 +1277,7 @@
     
     // 开启新对话 - Kimi专用
     async startNewConversation() {
-      console.log('🔄 开启新对话...');
+      console.log('📄 开启新对话...');
       
       try {
         // 检查停止状态
@@ -1258,7 +1300,7 @@
         }
         
         // 备用方案1：点击侧边栏新建会话按钮
-        console.log('🔄 Ctrl+K 失效，尝试点击新建会话按钮...');
+        console.log('📄 Ctrl+K 失效，尝试点击新建会话按钮...');
         const success2 = await this.tryClickNewChatButton();
         
         if (success2) {
@@ -1447,7 +1489,7 @@
     
     // 尝试显示侧边栏
     async tryShowSidebar() {
-      console.log('🔄 尝试显示侧边栏...');
+      console.log('📄 尝试显示侧边栏...');
       
       try {
         // 查找侧边栏切换按钮的选择器
@@ -1620,6 +1662,7 @@
         chatInput.focus();
         await this.delay(500);
         
+        // 🔥 这里调用 simulateTyping 函数，现在应该可以正常工作了
         // 尝试使用键盘输入模拟
         await simulateTyping(chatInput, question);
         await this.delay(800);
@@ -1673,48 +1716,6 @@
       }
       
       console.log('✅ 问题发送流程完成');
-    },
-
-    // 模拟打字输入（备用方案）
-    async simulateTyping(element, text) {
-      console.log('⌨️ 开始模拟打字输入...');
-      
-      element.focus();
-      
-      // 清空内容
-      element.innerHTML = '<p><br></p>';
-      
-      // 逐字符输入
-      for (let i = 0; i < text.length; i++) {
-        if (GlobalStopManager.checkStopped()) {
-          console.log('🛑 打字过程中检测到停止信号');
-          break;
-        }
-        
-        const char = text[i];
-        
-        // 创建输入事件
-        const inputEvent = new InputEvent('input', {
-          bubbles: true,
-          cancelable: true,
-          data: char,
-          inputType: 'insertText'
-        });
-        
-        // 更新内容
-        const currentText = element.textContent || '';
-        element.innerHTML = `<p>${currentText + char}</p>`;
-        
-        // 触发事件
-        element.dispatchEvent(inputEvent);
-        
-        // 短暂延迟模拟真实打字
-        if (i < text.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-      }
-      
-      console.log('✅ 模拟打字完成');
     },
 
     // 智能验证问题是否成功发送 - Kimi专用
@@ -1845,7 +1846,7 @@
               
               const result = await AutoQuestionManager.start(taskId, questions, statusCallback);
               
-              console.log(`🏁 自动收集完成:`, result);
+              console.log(`🎉 自动收集完成:`, result);
               
               // 发送任务完成通知到content script，由其转发到background
               window.postMessage({
