@@ -1,6 +1,6 @@
-// 弹窗界面逻辑 - 自动模式专用版（支持状态持久化）
+// 弹窗界面逻辑 - 自动模式专用版（支持状态持久化 + 安全数据管理）
 document.addEventListener('DOMContentLoaded', function() {
-  console.log('Popup DOM 已加载 - 自动模式专用版（支持状态持久化）');
+  console.log('Popup DOM 已加载 - 自动模式专用版（支持状态持久化 + 安全数据管理）');
   
   // DOM元素获取
   const elements = {
@@ -52,6 +52,13 @@ document.addEventListener('DOMContentLoaded', function() {
     isStopping: false,
     hasCollectedData: false,
     lastProgressUpdate: null,
+    // 🔥 新增：导出状态管理
+    exportStatus: {
+      autoExportAttempted: false,
+      autoExportSuccess: false,
+      lastExportError: null,
+      dataAwaitingExport: false
+    },
     
     generateTaskId() {
       return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -68,11 +75,12 @@ document.addEventListener('DOMContentLoaded', function() {
           isStopping: this.isStopping,
           hasCollectedData: this.hasCollectedData,
           lastProgressUpdate: this.lastProgressUpdate,
+          exportStatus: this.exportStatus, // 🔥 保存导出状态
           savedAt: Date.now()
         };
         
         await chrome.storage.local.set({ 'popup_state': stateToSave });
-        console.log('📱 状态已保存到storage:', stateToSave);
+        console.log('💾 状态已保存到storage:', stateToSave);
       } catch (error) {
         console.error('💥 保存状态失败:', error);
       }
@@ -85,7 +93,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const savedState = result.popup_state;
         
         if (savedState) {
-          console.log('📱 从storage恢复状态:', savedState);
+          console.log('💾 从storage恢复状态:', savedState);
           
           // 检查整体状态是否过期（超过24小时）
           const isExpired = Date.now() - savedState.savedAt > 24 * 60 * 60 * 1000;
@@ -120,11 +128,18 @@ document.addEventListener('DOMContentLoaded', function() {
           this.isStopping = savedState.isStopping || false;
           this.hasCollectedData = savedState.hasCollectedData || false;
           this.lastProgressUpdate = savedState.lastProgressUpdate;
+          // 🔥 恢复导出状态
+          this.exportStatus = savedState.exportStatus || {
+            autoExportAttempted: false,
+            autoExportSuccess: false,
+            lastExportError: null,
+            dataAwaitingExport: false
+          };
           
           console.log('✅ 状态恢复完成');
           return true;
         } else {
-          console.log('📱 未找到保存的状态');
+          console.log('💾 未找到保存的状态');
           return false;
         }
       } catch (error) {
@@ -152,6 +167,11 @@ document.addEventListener('DOMContentLoaded', function() {
       this.lastProgressUpdate = null;
       // 注意：hasCollectedData不重置，保留已收集的数据状态
       // 注意：questions不重置，保留已上传的问题
+      // 🔥 重置导出状态（但保留数据等待导出标志）
+      this.exportStatus.autoExportAttempted = false;
+      this.exportStatus.autoExportSuccess = false;
+      this.exportStatus.lastExportError = null;
+      // dataAwaitingExport 根据实际情况决定是否保留
       
       await this.saveState();
     },
@@ -165,6 +185,13 @@ document.addEventListener('DOMContentLoaded', function() {
       this.isStopping = false;
       this.hasCollectedData = false;
       this.lastProgressUpdate = null;
+      // 🔥 完全重置导出状态
+      this.exportStatus = {
+        autoExportAttempted: false,
+        autoExportSuccess: false,
+        lastExportError: null,
+        dataAwaitingExport: false
+      };
       
       await this.saveState();
       console.log('🧹 已完全重置所有状态和数据');
@@ -173,6 +200,12 @@ document.addEventListener('DOMContentLoaded', function() {
     // 更新状态（自动保存）
     async updateState(updates) {
       Object.assign(this, updates);
+      await this.saveState();
+    },
+
+    // 🔥 新增：更新导出状态
+    async updateExportStatus(updates) {
+      Object.assign(this.exportStatus, updates);
       await this.saveState();
     }
   };
@@ -226,25 +259,36 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
+  let updateButtonStatesTimeout = null;
   // 更新按钮状态
   function updateButtonStates() {
+    // 防抖：避免频繁更新
+    if (updateButtonStatesTimeout) {
+      clearTimeout(updateButtonStatesTimeout);
+    }
+    
+    updateButtonStatesTimeout = setTimeout(() => {
+      doUpdateButtonStates();
+    }, 100);
+  }
+  
+  function doUpdateButtonStates() {
     try {
       console.log('🔄 更新按钮状态，当前状态:', {
         isCollecting: AppState.isCollecting,
         isStopping: AppState.isStopping,
         questionsLength: AppState.questions.length,
-        hasCollectedData: AppState.hasCollectedData
+        hasCollectedData: AppState.hasCollectedData,
+        dataAwaitingExport: AppState.exportStatus.dataAwaitingExport,
+        currentTaskId: AppState.currentTaskId
       });
-
-      // 🔥 新增：检查是否需要显示强制重置按钮
-      const forceResetBtn = document.getElementById('forceReset');
-      const shouldShowForceReset = AppState.isStopping || 
-                                  (AppState.isCollecting && !AppState.currentTaskId);
-      
-      if (forceResetBtn) {
-        forceResetBtn.style.display = shouldShowForceReset ? 'block' : 'none';
+  
+      // 🔥 修复：强制检查DOM元素是否存在
+      if (!elements.startAutoCollectionBtn || !elements.stopCollectionBtn || !elements.finishAndExportBtn) {
+        console.error('❌ 关键DOM元素缺失，跳过按钮状态更新');
+        return;
       }
-
+  
       if (AppState.isCollecting && !AppState.isStopping) {
         // 收集进行中
         console.log('📊 状态：自动问答进行中');
@@ -262,13 +306,17 @@ document.addEventListener('DOMContentLoaded', function() {
         if (elements.modeIndicator) {
           elements.modeIndicator.classList.add('show');
           elements.modeIndicator.textContent = '🤖 自动问答模式进行中';
+          elements.modeIndicator.style.background = ''; // 重置背景色
         }
+        
+        console.log('✅ 已设置为进行中状态，停止按钮应该可见');
         
       } else if (AppState.isStopping) {
         // 正在停止状态
         console.log('🛑 状态：正在停止');
         elements.stopCollectionBtn.disabled = true;
         elements.stopCollectionBtn.textContent = '🔄 停止中...';
+        elements.stopCollectionBtn.style.display = 'block'; // 确保按钮可见
         
         // 隐藏清空按钮
         if (elements.clearDataBtn) {
@@ -297,20 +345,35 @@ document.addEventListener('DOMContentLoaded', function() {
           ? `🤖 开始自动问答 (${AppState.questions.length}个问题)` 
           : '🤖 请先上传问题文件';
           
-        // 显示手动导出按钮（如果有收集到的数据）
-        if (AppState.hasCollectedData) {
+        // 手动导出按钮逻辑
+        if (AppState.hasCollectedData || AppState.exportStatus.dataAwaitingExport) {
           elements.finishAndExportBtn.style.display = 'block';
           elements.finishAndExportBtn.disabled = false;
-          elements.finishAndExportBtn.textContent = '📋 手动导出数据';
+          
+          if (AppState.exportStatus.dataAwaitingExport) {
+            elements.finishAndExportBtn.textContent = '📋 导出待保存数据';
+            elements.finishAndExportBtn.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+          } else {
+            elements.finishAndExportBtn.textContent = '📋 手动导出数据';
+            elements.finishAndExportBtn.style.background = 'linear-gradient(135deg, #fd7e14 0%, #e8590c 100%)';
+          }
         } else {
           elements.finishAndExportBtn.style.display = 'none';
         }
         
         // 控制清空按钮显示
         if (elements.clearDataBtn) {
-          if (AppState.questions.length > 0 || AppState.hasCollectedData) {
+          if (AppState.questions.length > 0 || AppState.hasCollectedData || AppState.exportStatus.dataAwaitingExport) {
             elements.clearDataBtn.style.display = 'block';
             elements.clearDataBtn.disabled = false;
+            
+            if (AppState.exportStatus.dataAwaitingExport) {
+              elements.clearDataBtn.textContent = '⚠️ 清空数据(含待导出)';
+              elements.clearDataBtn.style.background = 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)';
+            } else {
+              elements.clearDataBtn.textContent = '🧹 清空所有数据';
+              elements.clearDataBtn.style.background = 'linear-gradient(135deg, #6c757d 0%, #5a6268 100%)';
+            }
           } else {
             elements.clearDataBtn.style.display = 'none';
           }
@@ -357,7 +420,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const activeTasks = response.tasks;
         console.log('📋 background中的活跃任务:', activeTasks);
         
-        // 🔥 新增：如果本地状态是停止中，但background中没有对应任务，说明停止已完成
+        // 🔥 新增：如果本地状态显示正在停止中，但background中没有对应任务，说明停止已完成
         if (AppState.isStopping && AppState.currentTaskId) {
           const backgroundTask = activeTasks[AppState.currentTaskId];
           
@@ -402,16 +465,25 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       }
       
-      // 🔥 新增：如果background中没有任何活跃任务，但本地状态显示正在进行，清理状态
+      // 🔥 关键修复：只有在确认background确实没有任务，且本地状态已经持续一段时间时才清理
       if (AppState.isCollecting || AppState.isStopping) {
-        console.log('🧹 background无活跃任务，清理本地状态');
+        // 检查状态持续时间
+        const stateAge = Date.now() - (AppState.startTime || 0);
+        const STATE_SYNC_DELAY = 5000; // 5秒延迟，给background足够时间创建任务
         
-        await AppState.updateState({
-          isCollecting: false,
-          isStopping: false
-        });
-        
-        return true;
+        if (stateAge > STATE_SYNC_DELAY) {
+          console.log('🧹 确认background无活跃任务且状态已持续足够时间，清理本地状态');
+          
+          await AppState.updateState({
+            isCollecting: false,
+            isStopping: false
+          });
+          
+          return true;
+        } else {
+          console.log(`⏳ 状态持续时间不足(${Math.floor(stateAge/1000)}s < ${STATE_SYNC_DELAY/1000}s)，暂不清理`);
+          return false;
+        }
       }
       
       return false;
@@ -511,19 +583,19 @@ document.addEventListener('DOMContentLoaded', function() {
         showStatus('⚠️ 任务正在运行或停止中', 'warning');
         return;
       }
-
+  
       // 检查是否有问题列表
       if (AppState.questions.length === 0) {
         showStatus('❌ 请先上传包含问题的Excel文件', 'error');
         return;
       }
-
+  
       // 检查页面
       if (!(await checkKimiPage())) {
         showStatus('❌ 请在Kimi聊天页面使用此插件\n👉 请访问: https://www.kimi.com/', 'error');
         return;
       }
-
+  
       // 检查连接
       showStatus('正在连接到页面，请稍候...', 'info');
       const tabId = await testConnection();
@@ -531,26 +603,28 @@ document.addEventListener('DOMContentLoaded', function() {
         showStatus('❌ 无法连接到页面\n解决方案：\n1. 刷新KIMI页面\n2. 重新加载插件\n3. 确保在正确的页面', 'error');
         return;
       }
-
+  
       // 确认开始
       const confirmMessage = `确定要开始自动问答吗？\n\n将自动处理 ${AppState.questions.length} 个问题\n预计耗时: ${Math.ceil(AppState.questions.length * 1.5)} 分钟\n\n⚠️ 请确保：\n1. kimi页面保持活跃\n2. 网络连接稳定\n3. 不要关闭浏览器标签页`;
       
       if (!confirm(confirmMessage)) {
         return;
       }
-
-      // 设置状态
+  
+      // 🔥 关键修复：设置状态并立即更新UI，同时设置startTime
       const taskId = AppState.generateTaskId();
+      const currentTime = Date.now();
+      
       await AppState.updateState({
         currentTaskId: taskId,
         isCollecting: true,
-        startTime: Date.now(),
+        startTime: currentTime, // 🔥 确保startTime被正确设置
         isStopping: false
       });
       
-      console.log('📊 状态已设置，更新UI...');
-      updateButtonStates();
-
+      console.log('📊 状态已设置，立即更新UI...');
+      updateButtonStates(); // 🔥 立即更新UI，不等background
+  
       // 通知background任务开始
       chrome.runtime.sendMessage({
         action: 'taskStart',
@@ -558,22 +632,33 @@ document.addEventListener('DOMContentLoaded', function() {
         type: 'autoCollection',
         tabId: tabId
       });
-
+  
       // 显示开始状态
       showStatus(`🤖 自动问答已启动！\n📊 将处理 ${AppState.questions.length} 个问题\n⏳ 预计耗时 ${Math.ceil(AppState.questions.length * 1.5)} 分钟\n⚠️ 请保持页面活跃，不要关闭标签页`, 'auto', 0);
-
-      // 执行启动自动收集
-      const result = await startAutoCollectionTask(tabId, AppState.currentTaskId, AppState.questions);
-
-      if (!result.success) {
-        showStatus(`❌ 启动自动问答失败: ${result.error}`, 'error');
-        await AppState.reset();
-        updateButtonStates();
-      } else {
-        console.log('✅ 自动收集已成功启动，等待后台处理完成');
-        showStatus(`🤖 自动问答进行中...\n📊 将处理 ${AppState.questions.length} 个问题\n⏳ 任务已在后台启动\n⚠️ 请保持页面活跃，完成后会自动导出`, 'auto', 0);
-      }
-
+  
+      // 🔥 修复：延迟启动实际任务，给UI足够时间更新
+      setTimeout(async () => {
+        try {
+          // 执行启动自动收集
+          const result = await startAutoCollectionTask(tabId, AppState.currentTaskId, AppState.questions);
+  
+          if (!result.success) {
+            console.error('启动自动问答失败:', result.error);
+            showStatus(`❌ 启动自动问答失败: ${result.error}`, 'error');
+            await AppState.reset();
+            updateButtonStates();
+          } else {
+            console.log('✅ 自动收集已成功启动，等待后台处理完成');
+            showStatus(`🤖 自动问答进行中...\n📊 将处理 ${AppState.questions.length} 个问题\n⏳ 任务已在后台启动\n⚠️ 请保持页面活跃，完成后会自动导出`, 'auto', 0);
+          }
+        } catch (error) {
+          console.error('启动任务异常:', error);
+          showStatus(`❌ 启动异常: ${error.message}`, 'error');
+          await AppState.reset();
+          updateButtonStates();
+        }
+      }, 500); // 延迟500ms启动实际任务
+  
     } catch (error) {
       console.error('💥 启动自动收集失败:', error);
       showStatus(`❌ 启动失败: ${error.message}`, 'error');
@@ -597,7 +682,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
   
       // 🔥 修改确认消息，告知会先导出已收集数据
-      const confirmMessage = '确定要停止自动问答吗？\n\n📋 停止操作将：\n• 立即停止当前问答处理\n• 导出已收集的数据到CSV文件\n• 清空问题文件和收集数据\n\n💡 如果想保留设置继续任务，请等待当前任务完成';
+      const confirmMessage = '确定要停止自动问答吗？\n\n📋 停止操作将：\n• 立即停止当前问答处理\n• 导出已收集的数据到CSV文件\n• 保留设置以便继续使用\n\n💡 如果想保留设置继续任务，请等待当前任务完成';
       
       if (!confirm(confirmMessage)) {
         return;
@@ -641,6 +726,12 @@ document.addEventListener('DOMContentLoaded', function() {
               }
             });
             
+            // 🔥 设置导出状态，但暂不清理数据
+            await AppState.updateExportStatus({
+              autoExportAttempted: true,
+              dataAwaitingExport: true
+            });
+            
             hasExportedData = true;
             console.log('✅ 已收集数据导出请求已发送');
             
@@ -660,7 +751,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (hasExportedData) {
         showStatus('🛑 正在停止自动问答任务...\n✅ 已收集数据导出中...\n🛑 正在停止所有组件...\n⏳ 请稍候...', 'info', 0);
       } else {
-        showStatus('🛑 正在停止自动问答任务...\n📝 未发现已收集数据\n🛑 正在停止所有组件...\n⏳ 请稍候...', 'info', 0);
+        showStatus('🛑 正在停止自动问答任务...\n📄 未发现已收集数据\n🛑 正在停止所有组件...\n⏳ 请稍候...', 'info', 0);
       }
   
       // 2.1 通知background停止任务
@@ -697,16 +788,17 @@ document.addEventListener('DOMContentLoaded', function() {
         console.warn('发送content script停止信号失败:', contentError);
       }
   
-      // 🔥 步骤3：延迟重置状态和清空数据，给导出和停止操作足够时间
+      // 🔥 步骤3：延迟重置状态，但不清空数据（等待用户确认导出）
       console.log('⏳ 等待导出和停止操作完成...');
       setTimeout(async () => {
-        console.log('🧹 执行完全清空操作...');
+        console.log('🔄 重置任务状态，但保留数据...');
         
-        // 完全重置状态（包括清空文件和数据）
-        await AppState.fullReset();
-        
-        // 清空文件输入UI
-        clearFileInput();
+        // 只重置任务相关状态，保留数据
+        await AppState.updateState({
+          isStopping: false,
+          isCollecting: false,
+          currentTaskId: null
+        });
         
         // 更新按钮状态
         updateButtonStates();
@@ -714,25 +806,24 @@ document.addEventListener('DOMContentLoaded', function() {
         // 🔥 根据是否导出了数据显示不同的完成消息
         let stopMessage;
         if (hasExportedData) {
-          stopMessage = '✅ 自动问答已停止\n💾 已收集数据已导出到下载文件夹\n🧹 所有数据已清空：\n• 已收集的问答数据已清除\n• 上传的问题文件已清除\n💡 可以重新上传文件开始新任务';
+          stopMessage = '✅ 自动问答已停止\n💾 已收集数据正在导出...\n📋 导出完成后可选择：\n• 点击"导出待保存数据"确认保存\n• 点击"清空数据"释放空间\n💡 可重新上传文件开始新任务';
         } else {
-          stopMessage = '✅ 自动问答已停止\n📝 未发现已收集数据\n🧹 所有数据已清空：\n• 上传的问题文件已清除\n💡 可以重新上传文件开始新任务';
+          stopMessage = '✅ 自动问答已停止\n📄 未发现已收集数据\n💡 可重新上传文件开始新任务';
         }
   
-        showStatus(stopMessage, 'success', 12000);
+        showStatus(stopMessage, 'success', 0); // 0表示不自动隐藏，让用户看到选项
         
-        console.log('✅ 自动问答任务停止流程完成，所有数据已清空');
+        console.log('✅ 自动问答任务停止流程完成，数据已保留');
         
-      }, hasExportedData ? 5000 : 3000); // 如果有导出数据，等待更长时间
+      }, hasExportedData ? 3000 : 2000); // 如果有导出数据，等待更长时间
   
     } catch (error) {
       console.error('💥 停止自动问答任务失败:', error);
       showStatus(`❌ 停止任务失败: ${error.message}\n🔄 正在强制重置状态...`, 'error', 5000);
       
-      // 即使停止失败，也要重置本地状态并清空数据
+      // 即使停止失败，也要重置本地状态
       setTimeout(async () => {
-        await AppState.fullReset();
-        clearFileInput();
+        await AppState.reset(); // 只重置任务状态，保留数据
         updateButtonStates();
       }, 2000);
     }
@@ -747,43 +838,65 @@ document.addEventListener('DOMContentLoaded', function() {
         showStatus('⚠️ 自动问答正在进行中，请等待完成或先停止', 'warning');
         return;
       }
-
-      if (!AppState.hasCollectedData) {
+  
+      // 检查是否有待导出数据
+      if (AppState.exportStatus.dataAwaitingExport) {
+        const confirmMessage = '检测到有待导出的数据\n\n这些数据是刚才停止任务时保留的，确定要导出吗？\n\n✅ 导出后数据将被清理';
+        
+        if (!confirm(confirmMessage)) {
+          return;
+        }
+      } else if (!AppState.hasCollectedData) {
         showStatus('⚠️ 还没有收集到任何数据', 'info');
         return;
+      } else {
+        const confirmMessage = '确定要导出当前收集的数据吗？';
+        
+        if (!confirm(confirmMessage)) {
+          return;
+        }
       }
-
-      const confirmMessage = '确定要导出当前收集的数据吗？';
-      
-      if (!confirm(confirmMessage)) {
-        return;
-      }
-
+  
       // 禁用导出按钮，防止重复点击
       elements.finishAndExportBtn.disabled = true;
-      elements.finishAndExportBtn.textContent = '🔄 导出中...';
-
+      elements.finishAndExportBtn.textContent = '📄 导出中...';
+  
       console.log('用户手动导出数据');
       
       showStatus('📋 正在准备导出数据...', 'info');
-
+  
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab || !tab.id) {
         throw new Error('无法获取当前页面标签');
       }
-
+  
+      // 先测试连接
+      showStatus('📋 正在检查页面连接...', 'info');
+      const tabId = await testConnection();
+      if (!tabId) {
+        throw new Error('无法连接到Kimi页面，请刷新页面后重试');
+      }
+  
+      showStatus('📋 正在获取并导出数据...', 'info');
       const result = await finishAndExportCollectionTask(tab.id, 'manual_export');
-
+  
       if (result.success) {
         if (result.data && result.data.length > 0) {
           const questionsCount = new Set(result.data.map(item => item.问题)).size;
           const sourcesCount = result.data.filter(item => item.网站url && item.网站url.trim()).length;
           
           showStatus(
-            `✅ 手动导出完成！\n📊 导出了 ${questionsCount} 个问答对，${sourcesCount} 个网址\n💾 CSV文件已保存到下载文件夹`, 
+            `✅ 手动导出完成！\n📊 导出了 ${questionsCount} 个问答对，${sourcesCount} 个网址\n💾 CSV文件已保存到下载文件夹\n🧹 是否需要清空数据？`, 
             'success', 
-            10000
+            0  // 不自动隐藏，让用户选择
           );
+          
+          // 更新导出状态
+          await AppState.updateExportStatus({
+            autoExportSuccess: true,
+            dataAwaitingExport: false,
+            lastExportError: null
+          });
           
           // 发送任务完成通知
           chrome.runtime.sendMessage({
@@ -792,20 +905,37 @@ document.addEventListener('DOMContentLoaded', function() {
             success: true,
             data: result.data
           });
+          
         } else {
-          showStatus('✅ 导出完成！\n📝 生成了空数据文件\n💾 CSV文件已保存到下载文件夹', 'success', 8000);
+          showStatus('✅ 导出完成！\n📄 生成了空数据文件\n💾 CSV文件已保存到下载文件夹', 'success', 8000);
+          
+          // 即使是空数据也更新导出状态
+          await AppState.updateExportStatus({
+            autoExportSuccess: true,
+            dataAwaitingExport: false
+          });
         }
       } else {
         showStatus(`❌ 手动导出失败: ${result.error}`, 'error');
+        
+        // 记录导出错误
+        await AppState.updateExportStatus({
+          lastExportError: result.error
+        });
       }
-
+  
     } catch (error) {
       console.error('💥 手动导出失败:', error);
       showStatus(`❌ 导出失败: ${error.message}`, 'error');
+      
+      // 记录导出错误
+      await AppState.updateExportStatus({
+        lastExportError: error.message
+      });
     } finally {
       // 重置导出按钮状态
       elements.finishAndExportBtn.disabled = false;
-      elements.finishAndExportBtn.textContent = '📋 手动导出数据';
+      updateButtonStates(); // 重新计算按钮文本和样式
     }
   }
 
@@ -887,7 +1017,6 @@ document.addEventListener('DOMContentLoaded', function() {
     return forceResetBtn;
   }
 
-
   // 🔥 新增：从标签页获取当前已收集数据的辅助函数
   async function getCurrentCollectedDataFromTab(tabId) {
     return new Promise((resolve) => {
@@ -933,117 +1062,62 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 
   // 添加清空数据功能
-function confirmAndClearData() {
-  const hasQuestions = AppState.questions.length > 0;
-  const hasData = AppState.hasCollectedData;
-  
-  let confirmMessage = '确定要清空所有数据吗？\n\n⚠️ 此操作将清空：\n';
-  
-  if (hasQuestions) {
-    confirmMessage += `• 已上传的 ${AppState.questions.length} 个问题\n`;
-  }
-  if (hasData) {
-    confirmMessage += '• 已收集的问答数据\n';
-  }
-  
-  confirmMessage += '\n此操作不可撤销！';
-  
-  if (confirm(confirmMessage)) {
-    console.log('🧹 用户确认清空所有数据');
-    performFullClear();
-  }
-}
-
-async function performFullClear() {
-  try {
-    console.log('🧹 开始执行完全清空操作...');
+  function confirmAndClearData() {
+    const hasQuestions = AppState.questions.length > 0;
+    const hasData = AppState.hasCollectedData;
+    const hasAwaitingData = AppState.exportStatus.dataAwaitingExport;
     
-    // 1. 完全重置状态
-    await AppState.fullReset();
+    let confirmMessage = '确定要清空所有数据吗？\n\n⚠️ 此操作将清空：\n';
     
-    // 2. 清空文件输入UI
-    clearFileInput();
+    if (hasQuestions) {
+      confirmMessage += `• 已上传的 ${AppState.questions.length} 个问题\n`;
+    }
+    if (hasData) {
+      confirmMessage += '• 已收集的问答数据\n';
+    }
+    if (hasAwaitingData) {
+      confirmMessage += '• 待导出的数据（尚未保存）\n';
+    }
     
-    // 3. 更新按钮状态
-    updateButtonStates();
+    confirmMessage += '\n此操作不可撤销！';
     
-    // 4. 显示清空完成消息
-    showStatus('✅ 所有数据已清空\n💡 可以重新上传问题文件开始新任务', 'success', 5000);
+    // 🔥 如果有待导出数据，额外警告
+    if (hasAwaitingData) {
+      confirmMessage += '\n\n⚠️ 特别提醒：您有未导出的数据，清空后将无法恢复！\n建议先点击"导出待保存数据"。';
+    }
     
-    console.log('✅ 完全清空操作完成');
-    
-  } catch (error) {
-    console.error('💥 清空操作失败:', error);
-    showStatus(`❌ 清空失败: ${error.message}`, 'error');
-  }
-}
-
-// 在事件监听器绑定部分添加清空按钮事件
-try {
-  console.log('🔧 开始绑定按钮事件监听器...');
-  
-  // ... 其他按钮事件监听器保持不变 ...
-  
-  // 🔥 新增：绑定清空数据按钮
-  if (elements.clearDataBtn) {
-    console.log('绑定清空数据按钮...');
-    elements.clearDataBtn.addEventListener('click', function() {
-      console.log('🖱️ 清空数据按钮被点击');
-      confirmAndClearData();
-    });
+    if (confirm(confirmMessage)) {
+      console.log('🧹 用户确认清空所有数据');
+      performFullClear();
+    }
   }
 
-  console.log('✅ 所有事件监听器已绑定');
-} catch (error) {
-  console.error('💥 绑定事件监听器失败:', error);
-  showStatus('❌ 界面初始化失败，请刷新页面', 'error');
-  return;
-}
-
-  // 通信函数
-  async function startAutoCollectionTask(tabId, taskId, questions) {
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve({ success: false, error: '启动自动收集响应超时' });
-      }, 10000);
+  async function performFullClear() {
+    try {
+      console.log('🧹 开始执行完全清空操作...');
       
-      chrome.tabs.sendMessage(tabId, { 
-        action: 'startAutoCollection',
-        taskId: taskId,
-        questions: questions
-      }, (response) => {
-        clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          resolve({ success: false, error: chrome.runtime.lastError.message });
-        } else {
-          resolve(response || { success: false, error: '无响应' });
-        }
-      });
-    });
-  }
-
-  async function finishAndExportCollectionTask(tabId, taskId) {
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        resolve({ success: false, error: '完成收集并导出响应超时' });
-      }, 30000);
+      // 1. 完全重置状态
+      await AppState.fullReset();
       
-      chrome.tabs.sendMessage(tabId, { 
-        action: 'finishAndExportCollection',
-        taskId: taskId
-      }, (response) => {
-        clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          resolve({ success: false, error: chrome.runtime.lastError.message });
-        } else {
-          resolve(response || { success: false, error: '无响应' });
-        }
-      });
-    });
+      // 2. 清空文件输入UI
+      clearFileInput();
+      
+      // 3. 更新按钮状态
+      updateButtonStates();
+      
+      // 4. 显示清空完成消息
+      showStatus('✅ 所有数据已清空\n💡 可以重新上传问题文件开始新任务', 'success', 5000);
+      
+      console.log('✅ 完全清空操作完成');
+      
+    } catch (error) {
+      console.error('💥 清空操作失败:', error);
+      showStatus(`❌ 清空失败: ${error.message}`, 'error');
+    }
   }
 
   // 监听来自background的消息
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
     if (AppState.isStopping && !['taskComplete'].includes(request.action)) {
       console.log(`⚠️ 正在停止中，忽略消息: ${request.action}`);
       return;
@@ -1072,22 +1146,66 @@ try {
         const questionsCount = request.data ? new Set(request.data.map(item => item.问题)).size : 0;
         const sourcesCount = request.data ? request.data.filter(item => item.网站url && item.网站url.trim()).length : 0;
         
-        showStatus(`✅ 自动问答完成！\n📊 共收集 ${questionsCount} 个问答对\n🔗 包含 ${sourcesCount} 个网址\n💾 CSV文件已自动保存到下载文件夹\n🧹 正在清空数据...`, 'success', 8000);
-        
-        // 🔥 关键修改：自动导出完成后执行完全清空操作
-        console.log('🧹 自动导出完成，开始执行完全清空操作...');
-        setTimeout(async () => {
-          await performFullClear();
+        // 🔥 检查是否是停止导出
+        if (request.isStopExport) {
+          console.log('📋 这是停止时的导出操作');
           
-          // 特别提示用户可以开始新任务
-          setTimeout(() => {
-            showStatus('🎉 任务完成！\n📊 数据已导出到下载文件夹\n🧹 界面已自动清空\n💡 可以上传新问题文件开始下一轮任务', 'success', 10000);
-          }, 1000);
+          // 更新导出状态
+          AppState.updateExportStatus({
+            autoExportAttempted: true,
+            autoExportSuccess: true,
+            dataAwaitingExport: false,
+            lastExportError: null
+          });
           
-        }, 2000); // 延迟2秒执行清空操作，让用户看到完成消息
+          // 显示停止导出完成消息
+          showStatus(`✅ 停止导出完成！\n📊 已保存 ${questionsCount} 个问答对\n🔗 包含 ${sourcesCount} 个网址\n💾 CSV文件已保存到下载文件夹\n💡 任务已完全停止，可开始新任务`, 'success', 0);
+          
+          // 不自动清空数据，让用户选择
+          updateButtonStates();
+          
+        }  else {
+          console.log('🔋 这是正常完成的导出操作');
+          
+          showStatus(`✅ 自动问答完成！\n📊 共收集 ${questionsCount} 个问答对\n🔗 包含 ${sourcesCount} 个网址\n💾 CSV文件已自动保存到下载文件夹\n\n🔋 任务已完成，您可以选择：\n• 点击"手动导出数据"重新导出\n• 点击"清空数据"开始新任务`, 'success', 0); // 0表示不自动隐藏
+          
+          // 🔥 关键修改：正常完成后不自动清空，而是保留数据状态让用户选择
+          console.log('🔋 正常任务完成，保留数据状态供用户选择后续操作...');
+          
+          // 更新状态：标记任务完成但保留数据
+          await AppState.updateState({
+            isCollecting: false,
+            isStopping: false,
+            currentTaskId: null,
+            hasCollectedData: true  // 🔥 关键：确保hasCollectedData为true
+          });
+          
+          // 更新导出状态：标记自动导出已完成，但数据仍可用
+          await AppState.updateExportStatus({
+            autoExportAttempted: true,
+            autoExportSuccess: true,
+            dataAwaitingExport: false,  // 自动导出已完成，但用户仍可手动导出
+            lastExportError: null
+          });
+          
+          // 🔥 重要：更新按钮状态，这会显示"手动导出数据"和"清空数据"按钮
+          updateButtonStates();
+          
+          console.log('✅ 正常任务完成处理完毕，数据已保留，用户可选择后续操作');
+          
+          // 🔥 移除原来的自动清空逻辑
+          // 不再执行 performFullClear()，让用户自己决定是否清空
+        }
         
       } else {
         showStatus(`❌ 自动问答失败: ${request.error || '未知错误'}`, 'error', 8000);
+        
+        // 🔥 记录导出错误
+        AppState.updateExportStatus({
+          autoExportAttempted: true,
+          autoExportSuccess: false,
+          lastExportError: request.error
+        });
         
         // 失败时也要重置状态，但保留文件数据以便重试
         AppState.reset();
@@ -1381,11 +1499,104 @@ try {
       stopCollection();
     });
 
+    // 🔥 新增：绑定清空数据按钮
+    if (elements.clearDataBtn) {
+      console.log('绑定清空数据按钮...');
+      elements.clearDataBtn.addEventListener('click', function() {
+        console.log('🖱️ 清空数据按钮被点击');
+        confirmAndClearData();
+      });
+    }
+
     console.log('✅ 所有事件监听器已绑定');
   } catch (error) {
     console.error('💥 绑定事件监听器失败:', error);
     showStatus('❌ 界面初始化失败，请刷新页面', 'error');
     return;
+  }
+
+  // 通信函数
+  async function startAutoCollectionTask(tabId, taskId, questions) {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        resolve({ success: false, error: '启动自动收集响应超时' });
+      }, 10000);
+      
+      chrome.tabs.sendMessage(tabId, { 
+        action: 'startAutoCollection',
+        taskId: taskId,
+        questions: questions
+      }, (response) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(response || { success: false, error: '无响应' });
+        }
+      });
+    });
+  }
+
+  async function finishAndExportCollectionTask(tabId, taskId) {
+    return new Promise((resolve) => {
+      let resolved = false;
+      const resolveOnce = (result) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(result);
+        }
+      };
+      
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          console.error('⏰ 手动导出整体超时');
+          resolveOnce({ 
+            success: false, 
+            error: '导出操作超时，请检查：1) Kimi页面是否响应正常 2) 网络连接是否稳定 3) 是否有大量数据需要处理' 
+          });
+        }
+      }, 45000); // 增加到45秒超时
+      
+      // 添加连接检查
+      chrome.tabs.sendMessage(tabId, { action: 'ping' }, (pingResponse) => {
+        if (chrome.runtime.lastError) {
+          clearTimeout(timeout);
+          resolveOnce({ 
+            success: false, 
+            error: `无法连接到页面：${chrome.runtime.lastError.message}。请刷新Kimi页面后重试。` 
+          });
+          return;
+        }
+        
+        if (!pingResponse || !pingResponse.success) {
+          clearTimeout(timeout);
+          resolveOnce({ 
+            success: false, 
+            error: '页面连接异常，请刷新Kimi页面后重试' 
+          });
+          return;
+        }
+        
+        // 连接正常，发送导出请求
+        chrome.tabs.sendMessage(tabId, { 
+          action: 'finishAndExportCollection',
+          taskId: taskId
+        }, (response) => {
+          clearTimeout(timeout);
+          if (chrome.runtime.lastError) {
+            resolveOnce({ 
+              success: false, 
+              error: `导出请求失败：${chrome.runtime.lastError.message}` 
+            });
+          } else {
+            resolveOnce(response || { 
+              success: false, 
+              error: '导出请求无响应，可能是页面脚本未正确加载' 
+            });
+          }
+        });
+      });
+    });
   }
 
   // 主初始化流程
@@ -1394,40 +1605,55 @@ try {
       console.log('🚀 开始初始化UI...');
       
       // 1. 恢复保存的状态
-      console.log('📱 恢复保存的状态...');
+      console.log('💾 恢复保存的状态...');
       const stateRestored = await AppState.loadState();
       
-      // 2. 与background同步状态
-      console.log('🔄 与background同步状态...');
-      const backgroundSynced = await syncWithBackground();
-      
-      // 🔥 3. 新增：检测并修复僵尸状态
-      console.log('🔍 检测僵尸状态...');
-      const zombieFixed = await detectAndFixZombieState();
-      
-      // 🔥 4. 新增：添加强制重置按钮
-      const forceResetBtn = addForceResetButton();
-      
-      // 5. 更新UI显示
-      console.log('🎨 更新UI显示...');
-      updateButtonStates();
-      updateFileInfoDisplay();
-      
-      // 6. 恢复运行状态显示
-      if (stateRestored || backgroundSynced) {
-        console.log('🔄 恢复运行状态显示...');
+      // 🔥 关键修复：如果恢复了运行状态，先更新UI再同步
+      if (stateRestored && (AppState.isCollecting || AppState.isStopping)) {
+        console.log('🔄 检测到运行状态，先更新UI再同步background...');
+        updateButtonStates();
+        updateFileInfoDisplay();
         restoreRunningStateDisplay();
+        
+        // 延迟与background同步，避免过早清理状态
+        setTimeout(async () => {
+          console.log('🔄 延迟与background同步状态...');
+          const backgroundSynced = await syncWithBackground();
+          if (backgroundSynced) {
+            updateButtonStates();
+          }
+        }, 2000); // 延迟2秒同步
+        
       } else {
-        // 显示初始状态 - 修改为Kimi专用提示
-        showStatus('🚀 Kimi自动问答器已就绪\n💡 使用步骤：\n1. 上传Excel文件，第一列为问题列表\n2. 点击"开始自动问答"进行批量问答\n3. 完成后会自动导出包含答案的CSV文件\n\n请确保在Kimi聊天页面使用', 'info', 10000);
+        // 2. 正常情况下的同步
+        console.log('🔄 与background同步状态...');
+        const backgroundSynced = await syncWithBackground();
+        
+        // 3. 检测并修复僵尸状态
+        console.log('🔍 检测僵尸状态...');
+        const zombieFixed = await detectAndFixZombieState();
+        
+        // 5. 更新UI显示
+        console.log('🎨 更新UI显示...');
+        updateButtonStates();
+        updateFileInfoDisplay();
+        
+        if (backgroundSynced) {
+          restoreRunningStateDisplay();
+        } else {
+          // 显示初始状态
+          showStatus('🚀 Kimi自动问答器已就绪\n💡 使用步骤：\n1. 上传Excel文件，第一列为问题列表\n2. 点击"开始自动问答"进行批量问答\n3. 完成后会自动导出包含答案的CSV文件\n\n请确保在Kimi聊天页面使用', 'info', 10000);
+        }
+        
+        if (zombieFixed) {
+          setTimeout(() => {
+            showStatus('✅ 已自动修复异常状态\n💡 插件现在可以正常使用了', 'success', 5000);
+          }, 1000);
+        }
       }
       
-      // 🔥 7. 新增：如果修复了僵尸状态，显示特殊提示
-      if (zombieFixed) {
-        setTimeout(() => {
-          showStatus('✅ 已自动修复异常状态\n💡 插件现在可以正常使用了', 'success', 5000);
-        }, 1000);
-      }
+      // 4. 添加强制重置按钮
+      const forceResetBtn = addForceResetButton();
       
       console.log('✅ Popup初始化完成');
     } catch (error) {
@@ -1435,6 +1661,7 @@ try {
       showStatus('❌ 界面初始化失败，请刷新页面', 'error');
     }
   }
+  
 
   // 执行初始化
   initialize();

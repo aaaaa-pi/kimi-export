@@ -767,6 +767,32 @@
       
       return result;
     },
+
+    // 添加数据验证方法
+    validateData() {
+      const issues = [];
+      
+      if (this.collectedData.length === 0) {
+        issues.push('没有收集到任何数据');
+        return { valid: false, issues };
+      }
+      
+      // 检查数据完整性
+      const requiredFields = ['问题', 'AI输出的答案', '文件名'];
+      this.collectedData.forEach((item, index) => {
+        requiredFields.forEach(field => {
+          if (!item[field] || item[field].trim() === '') {
+            issues.push(`第${index + 1}条记录缺少${field}`);
+          }
+        });
+      });
+      
+      return {
+        valid: issues.length === 0,
+        issues: issues,
+        dataCount: this.collectedData.length
+      };
+    },
     
     // 获取收集状态
     getStatus() {
@@ -1872,8 +1898,61 @@
           }, 100); // 100ms后启动，确保响应先发送
         }
   
+        // 🔥 新增：处理finishAndExportCollection请求
+        else if (action === 'finishAndExportCollection') {
+          console.log('📋 处理手动导出请求...');
+          
+          try {
+            // 获取当前已收集的数据
+            const collectedData = DataCollectionManager.getData();
+            
+            if (collectedData.length === 0) {
+              // 尝试从AutoQuestionManager获取数据
+              const autoData = AutoQuestionManager.getCurrentCollectedData();
+              if (autoData.success && autoData.data && autoData.data.length > 0) {
+                console.log('📊 从AutoQuestionManager获取到数据:', autoData.data.length);
+                
+                window.postMessage({
+                  type: 'KIMI_COLLECT_RESPONSE',
+                  action: 'finishAndExportCollection',
+                  success: true,
+                  data: autoData.data
+                }, '*');
+              } else {
+                console.log('⚠️ 没有找到可导出的数据');
+                
+                window.postMessage({
+                  type: 'KIMI_COLLECT_RESPONSE',
+                  action: 'finishAndExportCollection',
+                  success: false,
+                  error: '没有收集到任何数据'
+                }, '*');
+              }
+            } else {
+              console.log('📊 从DataCollectionManager获取到数据:', collectedData.length);
+              
+              window.postMessage({
+                type: 'KIMI_COLLECT_RESPONSE',
+                action: 'finishAndExportCollection',
+                success: true,
+                data: collectedData
+              }, '*');
+            }
+            
+          } catch (exportError) {
+            console.error('💥 手动导出处理失败:', exportError);
+            
+            window.postMessage({
+              type: 'KIMI_COLLECT_RESPONSE',
+              action: 'finishAndExportCollection',
+              success: false,
+              error: exportError.message
+            }, '*');
+          }
+        }
+  
         // 获取当前已收集数据处理
-        if (action === 'getCurrentCollectedData') {
+        else if (action === 'getCurrentCollectedData') {
           console.log('📊 收到获取当前已收集数据请求');
           
           try {

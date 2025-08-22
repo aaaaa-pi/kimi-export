@@ -410,20 +410,33 @@
 
   async function finishAndExportCollectionUsingInject() {
     return new Promise((resolve) => {
-      window.pendingResponse = resolve;
-
+      let resolved = false;
+      const resolveOnce = (result) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(result);
+        }
+      };
+  
+      window.pendingResponse = resolveOnce;
+  
       window.postMessage({
         type: 'KIMI_COLLECT_REQUEST',
         action: 'finishAndExportCollection'
       }, '*');
-
-      // 超时处理
+  
+      // 增加超时时间到15秒，并提供更详细的错误信息
       setTimeout(() => {
-        if (window.pendingResponse) {
+        if (!resolved) {
+          console.error('⏰ [ContentScript] 手动导出响应超时');
           window.pendingResponse = null;
-          resolve({ success: false, error: '完成收集并导出响应超时' });
+          resolveOnce({ 
+            success: false, 
+            error: '手动导出响应超时，可能的原因：1) inject.js未正确加载 2) 数据处理时间过长 3) 网络问题',
+            data: []
+          });
         }
-      }, 10000);
+      }, 15000); // 增加到15秒超时
     });
   }
 

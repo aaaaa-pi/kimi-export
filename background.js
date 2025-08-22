@@ -1,8 +1,6 @@
-// 后台服务脚本 - 自动模式专用版（支持popup状态恢复）
+// 后台服务脚本 - 自动模式专用版（修复Manifest V3兼容性问题）
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Kimi自动采集器已安装');
-  // 注意：不自动清理storage，保留用户状态
-  // chrome.storage.local.clear();
 });
 
 // 任务管理器
@@ -63,10 +61,9 @@ const TaskManager = {
   }
 };
 
-// 自动下载管理器
+// 修复的下载管理器 - Service Worker兼容版本
 const DownloadManager = {
   generateQAWithSourcesCSV(data) {
-    // 🔥 修改：添加了"文章引用时间"列
     let csv = '问题,AI输出的答案,文件名,序号,标题,内容,网站,网站url,文章引用时间\n';
     
     if (data && data.length > 0) {
@@ -78,21 +75,44 @@ const DownloadManager = {
     return csv;
   },
 
+  // 改进的CSV转义函数，更安全地处理特殊字符
   escapeCsvValue(value) {
     if (!value) return '';
-    return value.toString().replace(/"/g, '""');
+    
+    let str = value.toString();
+    
+    // 更安全的字符处理
+    str = str
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // 移除控制字符
+      .replace(/"/g, '""') // CSV标准的引号转义
+      .replace(/[\r\n]+/g, ' ') // 将换行符替换为空格
+      .trim(); // 移除首尾空白
+    
+    return str;
   },
 
+  // 现代化的UTF-8安全下载方法
   async downloadCSV(csvContent, filename) {
     try {
-      console.log(`📝 准备下载文件: ${filename}`);
+      console.log(`📄 准备下载文件: ${filename}`);
       
-      // 添加BOM以支持Excel正确显示中文
       const csvWithBOM = '\uFEFF' + csvContent;
       
-      // 使用更简单可靠的编码方式
-      const encodedCsv = encodeURIComponent(csvWithBOM);
-      const dataUrl = `data:text/csv;charset=utf-8,${encodedCsv}`;
+      // 使用 TextEncoder 进行正确的UTF-8编码
+      const encoder = new TextEncoder();
+      const uint8Array = encoder.encode(csvWithBOM);
+      
+      // 将 Uint8Array 转换为 base64
+      const base64Content = this.uint8ArrayToBase64(uint8Array);
+      const dataUrl = `data:text/csv;charset=utf-8;base64,${base64Content}`;
+      
+      console.log('📊 CSV内容统计:', {
+        原始长度: csvContent.length,
+        带BOM长度: csvWithBOM.length,
+        编码后字节数: uint8Array.length,
+        Base64长度: base64Content.length,
+        文件名: filename
+      });
       
       const downloadId = await chrome.downloads.download({
         url: dataUrl,
@@ -108,8 +128,150 @@ const DownloadManager = {
       console.error('💥 下载文件失败:', error);
       throw new Error(`下载失败: ${error.message}`);
     }
+  },
+
+  // 现代化的 Uint8Array 到 Base64 转换
+  uint8ArrayToBase64(uint8Array) {
+    try {
+      let binaryString = '';
+      const chunkSize = 0x8000; // 32KB chunks to avoid call stack overflow
+      
+      for (let i = 0; i < uint8Array.length; i += chunkSize) {
+        const chunk = uint8Array.subarray(i, i + chunkSize);
+        binaryString += String.fromCharCode.apply(null, chunk);
+      }
+      
+      return btoa(binaryString);
+    } catch (error) {
+      console.error('Base64编码失败:', error);
+      throw new Error(`Base64编码失败: ${error.message}`);
+    }
+  },
+
+  // Blob URL备用方法
+  async downloadCSVBlob(csvContent, filename) {
+    try {
+      console.log(`📄 尝试Blob下载方法: ${filename}`);
+      
+      const csvWithBOM = '\uFEFF' + csvContent;
+      const blob = new Blob([csvWithBOM], { type: 'text/csv;charset=utf-8' });
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const downloadId = await chrome.downloads.download({
+        url: blobUrl,
+        filename: filename,
+        saveAs: false,
+        conflictAction: 'uniquify'
+      });
+      
+      // 清理 Object URL
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      
+      console.log(`✅ Blob下载成功: ${filename}, downloadId: ${downloadId}`);
+      return downloadId;
+      
+    } catch (error) {
+      console.error('💥 Blob下载失败:', error);
+      throw new Error(`Blob下载失败: ${error.message}`);
+    }
+  },
+
+  // 传统URL编码备用方法
+  async downloadCSVFallback(csvContent, filename) {
+    try {
+      console.log(`📄 尝试备用下载方法: ${filename}`);
+      
+      const csvWithBOM = '\uFEFF' + csvContent;
+      
+      // 分段编码避免长字符串问题
+      const chunks = [];
+      const chunkSize = 1000;
+      
+      for (let i = 0; i < csvWithBOM.length; i += chunkSize) {
+        const chunk = csvWithBOM.substring(i, i + chunkSize);
+        chunks.push(encodeURIComponent(chunk));
+      }
+      
+      const encodedContent = chunks.join('');
+      const dataUrl = `data:text/plain;charset=utf-8,${encodedContent}`;
+      
+      const downloadId = await chrome.downloads.download({
+        url: dataUrl,
+        filename: filename.replace('.csv', '.txt'),
+        saveAs: true,
+        conflictAction: 'uniquify'
+      });
+      
+      console.log(`✅ 备用下载成功: ${filename}, downloadId: ${downloadId}`);
+      return downloadId;
+      
+    } catch (error) {
+      console.error('💥 备用下载也失败:', error);
+      throw new Error(`所有下载方法都失败: ${error.message}`);
+    }
   }
 };
+
+// 修复的通知创建函数
+function createNotification(config) {
+  try {
+    // 使用简单的1x1透明像素图标
+    const simpleIcon = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+    const notificationConfig = {
+      type: 'basic',
+      iconUrl: simpleIcon,
+      title: config.title || 'Kimi自动问答器',
+      message: (config.message || '').substring(0, 300), // 限制长度
+      priority: 1,
+      requireInteraction: false
+    };
+
+    console.log('📢 创建通知:', notificationConfig.title);
+
+    chrome.notifications.create(notificationConfig)
+      .then((notificationId) => {
+        console.log('✅ 通知创建成功, ID:', notificationId);
+      })
+      .catch((error) => {
+        console.warn('⚠️ 通知创建失败:', error);
+        
+        // 最简化备用通知
+        chrome.notifications.create({
+          type: 'basic',
+          title: config.title || 'Kimi自动问答器',
+          message: (config.message || '').substring(0, 100)
+        }).catch(() => {
+          console.error('❌ 连备用通知也失败');
+        });
+      });
+
+  } catch (error) {
+    console.error('💥 创建通知异常:', error);
+  }
+}
+
+// 修复的通知函数 - Manifest V3兼容版本
+function notifyAllPopupsTaskComplete(taskId, success, data, error, isStopExport = false) {
+  const message = {
+    action: 'taskComplete',
+    taskId: taskId,
+    success: success,
+    data: data,
+    error: error,
+    isStopExport: isStopExport,
+    timestamp: Date.now()
+  };
+  
+  // 尝试向popup广播消息
+  try {
+    chrome.runtime.sendMessage(message).catch((err) => {
+      console.log('没有popup在监听消息，这是正常的');
+    });
+  } catch (error) {
+    console.log('广播消息到popup失败:', error);
+  }
+}
 
 // 监听标签页更新
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -120,12 +282,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // 防止重复处理的任务集合
 let processingTasks = new Set();
-
-// 停止任务的集合
 let stoppingTasks = new Set();
 
 // 监听来自content script和popup的消息
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
   console.log('Background收到消息:', request);
 
   if (request.action === 'contentScriptReady') {
@@ -137,10 +297,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === 'taskStart') {
     const { taskId, type, tabId } = request;
     
-    // 确保任务不在停止列表中
     stoppingTasks.delete(taskId);
-    
-    // 自动收集任务状态为running
     const taskStatus = type === 'autoCollection' ? 'running' : 'waiting';
     
     TaskManager.saveTaskState(taskId, {
@@ -160,7 +317,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === 'taskProgress') {
     const { taskId, progress } = request;
     
-    // 检查任务是否正在停止
     if (stoppingTasks.has(taskId)) {
       console.log(`⚠️ 任务 ${taskId} 正在停止，忽略进度更新`);
       sendResponse({ success: false, message: '任务正在停止' });
@@ -184,50 +340,150 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === 'taskComplete') {
     const { taskId, success, data, error, isStopExport, stopExportInfo } = request;
     
+    console.log(`📋 任务完成详情:`, {
+      taskId: taskId,
+      success: success,
+      dataCount: data ? data.length : 0,
+      isStopExport: isStopExport,
+      error: error,
+      timestamp: new Date().toISOString()
+    });
+    
+    // 手动导出失败的特殊处理
+    if (taskId === 'manual_export' && !success) {
+      console.error('❌ 手动导出失败详情:', {
+        error: error,
+        timestamp: new Date().toISOString(),
+        sender: sender
+      });
+      
+      createNotification({
+        title: 'Kimi手动导出失败',
+        message: `导出失败：${error}\n\n建议解决方案：\n1. 刷新Kimi页面\n2. 重新加载扩展\n3. 检查网络连接`
+      });
+      
+      notifyAllPopupsTaskComplete(taskId, false, null, error, false);
+      sendResponse({ success: true });
+      return false;
+    }
+    
+    const isManualExport = taskId === 'manual_export';
+    
+    if (isManualExport) {
+      console.log('手动导出请求，直接处理下载...');
+      
+      if (success && data) {
+        try {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const filename = `Kimi手动导出数据_${timestamp}.csv`;
+          
+          const csvContent = DownloadManager.generateQAWithSourcesCSV(data);
+          console.log(`生成手动导出CSV文件: ${filename}`);
+          
+         // 改进的下载逻辑 - 多层备用方案
+          let downloadId;
+          let downloadSuccess = false;
+
+          // 方法1: 现代Base64编码
+          try {
+            console.log('🔄 尝试方法1: 现代Base64编码...');
+            downloadId = await DownloadManager.downloadCSV(csvContent, filename);
+            downloadSuccess = true;
+            console.log(`✅ 方法1成功: ${filename}`);
+          } catch (method1Error) {
+            console.warn('⚠️ 方法1失败:', method1Error.message);
+            
+            // 方法2: Blob URL
+            try {
+              console.log('🔄 尝试方法2: Blob URL...');
+              downloadId = await DownloadManager.downloadCSVBlob(csvContent, filename);
+              downloadSuccess = true;
+              console.log(`✅ 方法2成功: ${filename}`);
+            } catch (method2Error) {
+              console.warn('⚠️ 方法2失败:', method2Error.message);
+              
+              // 方法3: 传统URL编码
+              try {
+                console.log('🔄 尝试方法3: 传统编码...');
+                downloadId = await DownloadManager.downloadCSVFallback(csvContent, filename);
+                downloadSuccess = true;
+                console.log(`✅ 方法3成功: ${filename}`);
+              } catch (method3Error) {
+                console.error('❌ 所有下载方法都失败');
+                throw new Error(`所有下载方法失败: 
+          方法1: ${method1Error.message}
+          方法2: ${method2Error.message}  
+          方法3: ${method3Error.message}`);
+              }
+            }
+          }
+          
+          const questionsCount = new Set(data.map(item => item.问题)).size;
+          const sourcesCount = data.filter(item => item.网站url && item.网站url.trim()).length;
+          
+          createNotification({
+            title: 'Kimi手动导出完成',
+            message: `手动导出完成！\n导出了 ${questionsCount} 个问答对\n包含 ${sourcesCount} 个网址\n💾 CSV文件已保存到下载文件夹`
+          });
+          
+          notifyAllPopupsTaskComplete(taskId, true, data, null, false);
+          
+        } catch (downloadError) {
+          console.error('手动导出下载失败:', downloadError);
+          
+          createNotification({
+            title: 'Kimi手动导出失败',
+            message: `手动导出失败，请检查下载权限。错误: ${downloadError.message}`
+          });
+          
+          notifyAllPopupsTaskComplete(taskId, false, null, `下载失败: ${downloadError.message}`, false);
+        }
+      } else {
+        console.log('手动导出失败，无有效数据');
+        const errorMsg = error || '无有效数据';
+        
+        createNotification({
+          title: 'Kimi手动导出失败',
+          message: `手动导出失败: ${errorMsg}`
+        });
+        
+        notifyAllPopupsTaskComplete(taskId, false, null, errorMsg, false);
+      }
+      
+      sendResponse({ success: true });
+      return false;
+    }
+    
     // 检查任务是否正在停止
     if (stoppingTasks.has(taskId)) {
-      console.log(`⚠️ 任务 ${taskId} 正在停止，忽略完成通知`);
+      console.log(`任务 ${taskId} 正在停止，忽略完成通知`);
       sendResponse({ success: false, message: '任务正在停止' });
       return false;
     }
     
     // 防重复处理检查
     if (processingTasks.has(taskId)) {
-      console.log(`⚠️ 任务 ${taskId} 已在处理中，忽略重复请求`);
+      console.log(`任务 ${taskId} 已在处理中，忽略重复请求`);
       sendResponse({ success: false, error: '任务正在处理中' });
       return false;
     }
     
-    // 标记任务为处理中
     processingTasks.add(taskId);
     
-    // 🔥 区分完成导出和停止导出的日志
     if (isStopExport) {
-      console.log(`🛑 收到停止导出通知: taskId=${taskId}, success=${success}`);
-      if (stopExportInfo) {
-        console.log(`📊 停止导出数据信息: ${stopExportInfo.questionsCount} 个问答对，${stopExportInfo.totalRecords} 条记录`);
-      }
+      console.log(`收到停止导出通知: taskId=${taskId}, success=${success}`);
     } else {
-      console.log(`📋 任务完成通知: taskId=${taskId}, success=${success}`);
-    }
-    
-    if (data) {
-      console.log(`📊 数据长度: ${Array.isArray(data) ? data.length : 'N/A'}`);
-    }
-    if (error) {
-      console.log(`❌ 错误信息: ${error}`);
+      console.log(`任务完成通知: taskId=${taskId}, success=${success}`);
     }
     
     TaskManager.getTaskState(taskId).then(async currentState => {
       try {
         if (currentState) {
-          console.log(`📋 找到任务状态:`, currentState);
+          console.log(`找到任务状态:`, currentState);
           
           if (success && data) {
-            // 在background中下载文件
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
             
-            // 🔥 根据导出类型生成不同的文件名
             let filename;
             if (isStopExport) {
               filename = `Kimi停止导出数据_${timestamp}.csv`;
@@ -236,15 +492,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
             
             const csvContent = DownloadManager.generateQAWithSourcesCSV(data);
-            
-            console.log(`📝 生成CSV文件: ${filename}`);
-            console.log(`💾 开始下载文件: ${filename}`);
+            console.log(`生成CSV文件: ${filename}`);
             
             try {
-              const downloadId = await DownloadManager.downloadCSV(csvContent, filename);
-              console.log(`✅ 文件下载启动: ${filename}, downloadId: ${downloadId}`);
+              // 🔥 使用修复后的下载方法
+              let downloadId;
+              try {
+                downloadId = await DownloadManager.downloadCSV(csvContent, filename);
+                console.log(`文件下载启动: ${filename}, downloadId: ${downloadId}`);
+              } catch (downloadError) {
+                console.warn('主要下载方法失败，尝试备用方法:', downloadError);
+                downloadId = await DownloadManager.downloadCSVFallback(csvContent, filename);
+                console.log(`备用下载方法成功: ${filename}, downloadId: ${downloadId}`);
+              }
               
-              // 保存完成状态
               await TaskManager.saveTaskState(taskId, {
                 ...currentState,
                 status: isStopExport ? 'stopped_with_export' : 'completed',
@@ -255,49 +516,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 isStopExport: isStopExport
               });
               
-              console.log(`✅ 任务状态已更新为${isStopExport ? 'stopped_with_export' : 'completed'}: ${taskId}`);
-              
-              // 🔥 根据导出类型显示不同的完成通知
               const questionsCount = new Set(data.map(item => item.问题)).size;
               const sourcesCount = data.filter(item => item.网站url && item.网站url.trim()).length;
               
               let notificationConfig;
               if (isStopExport) {
-                // 停止导出通知
                 notificationConfig = {
-                  type: 'basic',
-                  iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23ff9800" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
                   title: 'Kimi自动问答已停止',
-                  message: `🛑 用户手动停止任务\n📊 已导出 ${questionsCount} 个问答对\n🔗 包含 ${sourcesCount} 个网址\n💾 数据已保存到下载文件夹`
+                  message: `用户手动停止任务\n已导出 ${questionsCount} 个问答对\n包含 ${sourcesCount} 个网址\n数据已保存到下载文件夹`
                 };
               } else {
-                // 完成导出通知
                 notificationConfig = {
-                  type: 'basic',
-                  iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%2328a745" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>',
                   title: 'Kimi自动问答完成',
-                  message: `🎉 批量问答已完成！\n📊 收集了 ${questionsCount} 个问答对\n🔗 包含 ${sourcesCount} 个网址\n💾 CSV文件已保存到下载文件夹`
+                  message: `批量问答已完成！\n收集了 ${questionsCount} 个问答对\n包含 ${sourcesCount} 个网址\nCSV文件已保存到下载文件夹`
                 };
               }
               
-              chrome.notifications.create(notificationConfig);
-              
-              console.log(`🔔 ${isStopExport ? '停止导出' : '自动收集完成'}通知已显示`);
-              
-              // 通知所有popup窗口任务完成（为了支持多窗口）
+              createNotification(notificationConfig);
               notifyAllPopupsTaskComplete(taskId, true, data, null, isStopExport);
               
-              // 🔥 根据导出类型设置不同的清理延迟时间
-              const cleanupDelay = isStopExport ? 3 * 60 * 1000 : 5 * 60 * 1000; // 停止导出3分钟后清理，完成导出5分钟后清理
+              const cleanupDelay = isStopExport ? 3 * 60 * 1000 : 5 * 60 * 1000;
               setTimeout(() => {
                 TaskManager.clearTask(taskId);
                 processingTasks.delete(taskId);
                 stoppingTasks.delete(taskId);
-                console.log(`🧹 任务状态已清理: ${taskId}`);
+                console.log(`任务状态已清理: ${taskId}`);
               }, cleanupDelay);
               
             } catch (downloadError) {
-              console.error('💥 下载文件失败:', downloadError);
+              console.error('下载文件失败:', downloadError);
+              
               await TaskManager.saveTaskState(taskId, {
                 ...currentState,
                 status: 'failed',
@@ -306,25 +554,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 isStopExport: isStopExport
               });
               
-              // 🔥 根据导出类型显示不同的错误通知
               const errorTitle = isStopExport ? 'Kimi停止导出失败' : 'Kimi自动采集器';
               const errorMessage = isStopExport 
                 ? `停止导出失败，请检查下载权限。错误: ${downloadError.message}`
                 : `下载失败，请检查下载权限。错误: ${downloadError.message}`;
               
-              chrome.notifications.create({
-                type: 'basic',
-                iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23ff9800" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
+              createNotification({
                 title: errorTitle,
                 message: errorMessage
               });
               
-              // 通知popup任务失败
               notifyAllPopupsTaskComplete(taskId, false, null, `下载失败: ${downloadError.message}`, isStopExport);
             }
           } else {
-            // 任务失败
-            console.log(`❌ 任务失败，更新状态: ${taskId}`);
+            console.log(`任务失败，更新状态: ${taskId}`);
             await TaskManager.saveTaskState(taskId, {
               ...currentState,
               status: 'failed',
@@ -333,41 +576,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               isStopExport: isStopExport
             });
             
-            // 只在明显的错误情况下显示通知
             if (error && !error.includes('用户停止')) {
               const errorTitle = isStopExport ? 'Kimi停止导出失败' : 'Kimi自动采集器';
               const errorMessage = isStopExport 
                 ? `停止导出失败: ${error || '未知错误'}`
                 : `收集失败: ${error || '未知错误'}`;
               
-              chrome.notifications.create({
-                type: 'basic',
-                iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23ff0000" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>',
+              createNotification({
                 title: errorTitle,
                 message: errorMessage
               });
             }
             
-            // 通知popup任务失败
             notifyAllPopupsTaskComplete(taskId, false, null, error, isStopExport);
             
-            // 1分钟后清理失败的任务状态
             setTimeout(() => {
               TaskManager.clearTask(taskId);
               processingTasks.delete(taskId);
               stoppingTasks.delete(taskId);
-              console.log(`🧹 失败任务状态已清理: ${taskId}`);
+              console.log(`失败任务状态已清理: ${taskId}`);
             }, 60 * 1000);
           }
         } else {
-          console.warn(`⚠️ 未找到任务状态: ${taskId}`);
+          console.warn(`未找到任务状态: ${taskId}`);
         }
       } finally {
-        // 无论成功失败，都要移除处理标记
         processingTasks.delete(taskId);
       }
     }).catch(error => {
-      console.error('💥 处理任务完成通知失败:', error);
+      console.error('处理任务完成通知失败:', error);
       processingTasks.delete(taskId);
     });
     
@@ -408,7 +645,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const { taskId, reason } = request;
     console.log(`🛑 收到停止任务请求: ${taskId}, 原因: ${reason}`);
     
-    // 立即标记任务为停止中
     stoppingTasks.add(taskId);
     
     TaskManager.getTaskState(taskId).then(async currentState => {
@@ -416,7 +652,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log(`🛑 停止任务: ${taskId}`);
         
         try {
-          // 更新任务状态为已停止
           await TaskManager.saveTaskState(taskId, {
             ...currentState,
             status: 'stopped',
@@ -426,9 +661,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           
           console.log(`✅ 任务状态已更新为stopped: ${taskId}`);
           
-          console.log('🛑 任务停止完成，用户界面将显示停止状态');
-          
-          // 延迟清理任务状态
           setTimeout(() => {
             TaskManager.clearTask(taskId);
             processingTasks.delete(taskId);
@@ -465,9 +697,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     chrome.storage.local.clear().then(() => {
       console.log('✅ 所有任务状态已清理');
       
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%2328a745" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>',
+      createNotification({
         title: 'Kimi自动采集器',
         message: '所有后台任务状态已强制清理'
       });
@@ -484,32 +714,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false;
 });
 
-// 通知所有popup窗口任务完成的函数
-function notifyAllPopupsTaskComplete(taskId, success, data, error, isStopExport = false) {
-  try {
-    // 获取所有插件窗口
-    chrome.runtime.getViews({ type: 'popup' }).forEach(view => {
-      try {
-        // 向popup窗口发送消息
-        if (view && view.chrome && view.chrome.runtime) {
-          view.chrome.runtime.sendMessage({
-            action: 'taskComplete',
-            taskId: taskId,
-            success: success,
-            data: data,
-            error: error,
-            isStopExport: isStopExport // 🔥 传递停止导出标志
-          });
-        }
-      } catch (error) {
-        console.log('通知popup窗口失败:', error);
-      }
-    });
-  } catch (error) {
-    console.error('获取popup窗口失败:', error);
-  }
-}
-
 // 定期清理过期的任务状态
 setInterval(async () => {
   try {
@@ -519,7 +723,6 @@ setInterval(async () => {
     
     for (const [key, value] of Object.entries(result)) {
       if (key.startsWith('task_')) {
-        // 清理超过24小时的任务
         if (now - value.lastUpdated > 24 * 60 * 60 * 1000) {
           expiredTasks.push(key);
           
@@ -528,7 +731,6 @@ setInterval(async () => {
           stoppingTasks.delete(taskId);
         }
       }
-      // 清理超过24小时的popup状态
       else if (key === 'popup_state') {
         if (value.savedAt && now - value.savedAt > 24 * 60 * 60 * 1000) {
           expiredTasks.push(key);
@@ -543,12 +745,11 @@ setInterval(async () => {
   } catch (error) {
     console.error('清理过期项目失败:', error);
   }
-}, 60 * 60 * 1000); // 每小时检查一次
+}, 60 * 60 * 1000);
 
 // 监听标签页关闭，清理相关任务
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
   try {
-    // 查找与该标签页相关的任务
     const result = await chrome.storage.local.get(null);
     const tasksToCleanup = [];
     
@@ -556,7 +757,6 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
       if (key.startsWith('task_') && value.tabId === tabId) {
         tasksToCleanup.push(key);
         
-        // 清理相关标记
         const taskId = key.replace('task_', '');
         processingTasks.delete(taskId);
         stoppingTasks.delete(taskId);
